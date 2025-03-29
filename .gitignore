@@ -1,1 +1,8 @@
 .env
+.package-lock.json
+package-lock.json
+example_screenshot.png
+
+/typescript/playwright-report
+/typescript/test-results
+/typescript/node_modules
