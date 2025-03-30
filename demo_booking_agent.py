@@ -203,7 +203,7 @@ def create_calendar_view_agent():
         HumanMessage(content="""
         Step 1: Analyze the page and find the next available date button that should be clicked.
         Step 2: Output the text of the button that should be clicked.
-        Step 3: find an available time button that should be clicked. It must be a valid time, such as "10:00", "2:00", etc. 
+        Step 3: find an available time button that should be clicked. It must be a valid time, with text such as "10:00", "2:00 pm", "11:00 am", etc. 
         Step 4: Output the text of the time button that should be clicked.
         Current page state: {page_data}
         
@@ -300,6 +300,8 @@ def should_retry(state: Dict) -> Dict:
     """Determine if we should retry the current phase"""
     if state["error_count"] < state["max_retries"]:
         return{"error_count": state["error_count"] + 1}
+    else:
+        return{"status": "failure"}
 
 
 
@@ -309,7 +311,7 @@ def navigate_to_booking(state: Dict) -> Dict:
     try:
         # Get page data and update state
         page_data = analyze_page("")
-        state["page_data"] = page_data
+        #state["page_data"] = page_data
         
         # Accept cookies
         accept_cookies("")
@@ -331,7 +333,7 @@ def navigate_to_booking(state: Dict) -> Dict:
             # Try to click using the selected text
             if click_and_switch_to_new_tab(f"a:has-text('{response}')"):
                 
-                return{"status": "success"}
+                return{"page_data": page_data, "status": "success"}
             
             # If direct click fails, try the selector
             #if click_element(response["selector"]):
@@ -340,14 +342,14 @@ def navigate_to_booking(state: Dict) -> Dict:
             
             # If both fail, try the fallback method
             if click_all_book_demo_buttons(""):
-                return{"status": "success"}
+                return{"page_data": page_data, "status": "success"}
         except (json.JSONDecodeError, KeyError) as e:
             logging.error(f"Error parsing agent response: {str(e)}")
         
-        return{"status": "retry"}
+        return{"page_data": page_data, "status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return{"status": "retry"}
+        return{"page_data": page_data, "status": "retry"}
 def booking_page_verification(state: Dict) -> Dict:
     """Handle verification of booking page"""
     agent = create_verification_agent()
@@ -355,7 +357,10 @@ def booking_page_verification(state: Dict) -> Dict:
     try:
         # Update state with new page data
         page_data = analyze_page("")  # Pass empty string as tool_input
-        state["page_data"] = page_data
+        #page is the same, so retry
+        if(page_data == state["page_data"]):
+            return{"page_data": page_data, "status": "retry"}
+        #state["page_data"] = page_data
         
         result = agent.invoke({
             "page_data": page_data,
@@ -366,13 +371,13 @@ def booking_page_verification(state: Dict) -> Dict:
         
         if result["verified"]:
             if result["page_type"] == "calendar_view":
-                return{"status": "calendar_view"}
+                return{"page_data": page_data, "status": "calendar_view"}
             elif result["page_type"] == "form_view":
-                return{"status": "form_view"}
-        return{"status": "retry"}
+                return{"page_data": page_data, "status": "form_view"}
+        return{"page_data": page_data, "status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return{"status": "retry"}
+        return{"page_data": page_data, "status": "retry"}
 def calendar_view_button_clicking(state: Dict) -> Dict:
     """Handle clicking the buttons in the calendar view"""
     agent = create_calendar_view_agent()    
@@ -402,12 +407,12 @@ def calendar_view_button_clicking(state: Dict) -> Dict:
                     logging.error(f"Error in {state['current_phase']}: {str(e)}")
                     #return{"status": "retry"}
         if failed:
-            return{"status": "retry"}
+            return{"page_data": page_data, "status": "retry"}
         else:
-            return{"status": "success"}
+            return{"page_data": page_data, "status": "success"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return{"status": "retry"}
+        return{"page_data": page_data, "status": "retry"}
     
     
     
@@ -471,13 +476,13 @@ def fill_booking_form(state: Dict) -> Dict:
         if click_and_switch_to_new_tab(f"button:has-text('{result['button_text']}')"):
             failed = False
         if failed:
-            return {"status": "retry"}
+            return {"page_data": page_data, "status": "retry"}
         else:
-            return {"status": "success"}
+            return {"page_data": page_data, "status": "success"}
         
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return {"status": "retry"}
+        return {"page_data": page_data, "status": "retry"}
 
 
 def verify_booking_complete(state: Dict) -> Dict:
@@ -496,13 +501,13 @@ def verify_booking_complete(state: Dict) -> Dict:
         
         result = json.loads(result["output"])
         if result["completed"]:
-            return {"status": "success"}    
+            return {"page_data": page_data, "status": "success"}    
         
-        return {"status": "retry"}
+        return {"page_data": page_data, "status": "retry"}
         
     except Exception as e:
         logging.error(f"Error in {state.current_phase}: {str(e)}")
-        return {"status": "retry"}
+        return {"page_data": page_data, "status": "retry"}
 
             
 
@@ -619,7 +624,10 @@ def run_booking_automation(url: str, booking_details: Dict):
         
         # Run the workflow
         final_state = workflow.invoke(initial_state)
-        return True
+        if final_state["status"] == "success":
+            return True
+        else:
+            return False
 
     except Exception as e:
         logging.error(f"Error in run_booking_automation: {str(e)}")
@@ -630,6 +638,7 @@ def run_booking_automation(url: str, booking_details: Dict):
             automation.sync_close()
         except Exception as e:
             logging.error(f"Error closing automation: {str(e)}")
+
 
 # def validate_booking_details(details: Dict) -> bool:
 #     required_fields = ["name", "email"]
@@ -644,7 +653,7 @@ if __name__ == "__main__":
     }
     
     success = run_booking_automation(
-        url="https://www.tryfabricate.com/",
+        url="https://www.scale.com/",
         booking_details=booking_details
     )
     

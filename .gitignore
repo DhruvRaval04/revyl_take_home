@@ -7,3 +7,8 @@ current_page.png
 /typescript/playwright-report
 /typescript/test-results
 /typescript/node_modules
+
+/booking-frontend/node_modules
+/booking-frontend/.next
+/booking-frontend/README.md
+/booking-frontend/.gitignore

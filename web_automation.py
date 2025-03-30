@@ -3,7 +3,8 @@ from typing import List, Dict, Optional
 import time
 from bs4 import BeautifulSoup
 import asyncio
-
+import logging
+import traceback
 
 class WebAutomation:
     def __init__(self):
@@ -11,7 +12,11 @@ class WebAutomation:
         self.browser = None
         self.context = None
         self.page = None
-        self.loop = asyncio.get_event_loop()
+         # Don't use get_event_loop() directly
+        # Instead, create a new loop for each thread
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        # self.loop = asyncio.get_event_loop()
 
     async def initialize(self):
         """Initialize the browser and context"""
@@ -340,7 +345,17 @@ class WebAutomation:
     # Synchronous wrapper methods for compatibility with the agent workflow
     def sync_initialize(self) -> None:
         """Synchronous wrapper for initialize"""
-        return self.loop.run_until_complete(self.initialize())
+        try:
+            # Create a new event loop for the current thread
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            logging.info("Created new event loop for thread")
+            return self.loop.run_until_complete(self.initialize())
+        except Exception as e:
+            error_details = traceback.format_exc()
+            logging.error(f"Error initializing WebAutomation: {str(e)}\n{error_details}")
+            raise
+            return self.loop.run_until_complete(self.initialize())
 
     def sync_navigate_to(self, url: str) -> None:
         """Synchronous wrapper for navigate_to"""
