@@ -29,6 +29,7 @@ class BookingStateDict(TypedDict):
     error_count: int
     max_retries: int
     booking_details: Dict
+    status: Optional[str]
 
 @dataclass
 class BookingState:
@@ -38,7 +39,7 @@ class BookingState:
     booking_details: Dict
     error_count: int = 0
     max_retries: int = 3
-
+    status: Optional[str] = None
 # Tools for the agent
 @tool
 def analyze_page(tool_input: str = "") -> Dict:
@@ -46,13 +47,21 @@ def analyze_page(tool_input: str = "") -> Dict:
     global automation
     html_details = automation.sync_analyze_html_detailed()
     clickable = automation.sync_get_clickable_elements()
-    automation.sync_take_screenshot("current_page.png")
-    
+
+    # Try taking a screenshot and handle timeout errors
+    screenshot_path = "current_page.png"
+    try:
+        automation.sync_take_screenshot(screenshot_path)
+    except Exception as e:
+        print(f"Screenshot failed: {e}")
+        screenshot_path = None
+
     return {
         "html_analysis": html_details,
         "clickable_elements": clickable,
-        "screenshot_path": "current_page.png"
+        "screenshot_path": screenshot_path
     }
+
 
 @tool
 def click_element(selector: str) -> bool:
@@ -81,6 +90,24 @@ def accept_cookies(tool_input: str = "") -> bool:
     """Accept cookies on the page"""
     global automation
     return automation.sync_accept_cookies()
+
+@tool
+def click_and_switch_to_new_tab(selector: str) -> bool:
+    """Click an element and switch to the new tab if one is opened"""
+    global automation
+    return automation.sync_click_and_switch_to_new_tab(selector)
+
+@tool
+def reload_page(tool_input: str = "") -> bool:
+    """Reload the page"""
+    global automation
+    return automation.sync_reload_page()
+
+@tool 
+def scroll_page(tool_input: str = "") -> bool:
+    """Scroll the page in the specified direction"""
+    global automation
+    return automation.sync_scroll()
 
 # Agent definitions
 # def create_base_navigation_agent():
@@ -120,14 +147,16 @@ def create_navigation_agent():
         3. Look at the element's class and other attributes
         4. Prioritize elements that are clearly call-to-action buttons/links"""),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
-        HumanMessage(content="""Verify if we have reached a booking/demo page.
+        HumanMessage(content="""
+        Step 1: Analyze the page and find the button that should be clicked in order to book a demo.
+        Step 2: Output the text of the button that should be clicked.
         Current page state: {page_data}
         
         Return only the specific text to click!
         """)
     ])
     
-    tools = [analyze_page, click_element]
+    tools = [analyze_page]
     
     agent = create_openai_functions_agent(llm, tools, prompt)
     return AgentExecutor(agent=agent, tools=tools, verbose=True)
@@ -148,8 +177,8 @@ def create_verification_agent():
         - Submit buttons related to booking"""),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
         HumanMessage(content="""
-        Step 1: Verify if this is a booking page based on its content.
-        Step 2: If there are links to book a demo, it is a "link_view". If there are form fields to fill out, it is a "form_view". If it is a booking page, classify it into one of two types: "link_view" or "form_view.".
+        Step 1: Verify if this is a booking page based on its content and layout.
+        Step 2: If there are links to book a demo, it is a "calendar_view". If there are form fields to fill out, it is a "form_view". If it is a booking page, classify it into one of two types: "calendar_view" or "form_view".
         Current page state: {page_data}
         
         Return your assessment in the format:
@@ -168,28 +197,30 @@ def create_calendar_view_agent():
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content="""You are an expert booking agent.
         Your task is to analyze the page (will be a page with buttons to book a demo).
-        You will be given the page data and in the case of a button, you will output the text of the buttons that should be clicked.
+        You will be given the page data of a calendar view, and you will need to output the text of the buttons that should be clicked, these should be date/time buttons. Make sure to only output texts of buttons that exist on the page.
         """),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
         HumanMessage(content="""
-        Step 1: Analyze the page and find the buttons that should be clicked in order. Some examples of these buttons may be buttons to select a date, select a time, or a button to book a demo.
-        Step 2: Make sure these buttons are clickable, they shouldn't be disabled or grayed out.
-        Step 3: Output the text of the buttons that should be clicked in order.
-        Step 4: If there are no buttons to click, output "no_buttons_to_click".
+        Step 1: Analyze the page and find the next available date button that should be clicked.
+        Step 2: Output the text of the button that should be clicked.
+        Step 3: find an available time button that should be clicked. It must be a valid time, such as "10:00", "2:00", etc. 
+        Step 4: Output the text of the time button that should be clicked.
         Current page state: {page_data}
         
+        In the scenario that only one button is available, output the text of the button in the format:
+        {"buttons_to_click": ["button_text"]}
         Return your assessment in the format:
         {"buttons_to_click": ["button1_text", "button2_text", "button3_text"]} or {"buttons_to_click": "no_buttons_to_click"}""")
     ])
     
-    tools = [analyze_page, click_element]
+    tools = [analyze_page, scroll_page]
     
     agent = create_openai_functions_agent(llm, tools, prompt)
     return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 def create_form_filling_agent():
     """Create an agent for filling the booking form"""
-    llm = ChatOpenAI(model="gpt-4-vision-preview", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
     
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content="""You are an expert form filling agent.
@@ -206,24 +237,30 @@ def create_form_filling_agent():
            - For industry: Choose "Technology" or "Software"
            - For any other fields: Use appropriate professional defaults
         
+        
+        
         Always ensure the data is professional and consistent."""),
-        MessagesPlaceholder(variable_name="chat_history"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
-        HumanMessage(content="""Fill out the form with these details: {booking_details}
+        HumanMessage(content="""
+        Step 1: Analyze the page and find the form fields that should be filled out. Fields like "First Name", "Email" are very likely to be form fields that should be filled out.
+        Step 2: Find the submit button and output its button text.
+        Step 3: Pair the form fields with the details provided.
         Current page state: {page_data}
+        Fill out the form with these details: {details}
         
-        Return the form fields in the format:
-        {"fields": {"selector1": "value1", "selector2": "value2", ...}}
+        You should also output the text of the button that should be clicked to submit the form.
+        ONLY output the form fields in the format:
+        {"fields": {"selector1": "value1", "selector2": "value2", ...}, "button_text": "button_text"}
         
-        After all fields are filled, return:
-        {"action": "submit", "selector": "submit-button-selector"}
         
-        Include explanation for any transformed or default values used.""")
+        
+        """)
     ])
     
-    tools = [analyze_page, fill_form_fields, click_element]
+    tools = [analyze_page, scroll_page]
     
-    return create_openai_functions_agent(llm, tools, prompt)
+    agent = create_openai_functions_agent(llm, tools, prompt)
+    return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
   
 
@@ -231,7 +268,7 @@ def create_form_filling_agent():
 
 def create_completion_verification_agent():
     """Create an agent for verifying successful completion of the booking process"""
-    llm = ChatOpenAI(model="gpt-4-vision-preview", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
     
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content="""You are an expert verification agent.
@@ -244,27 +281,25 @@ def create_completion_verification_agent():
         - Thank you messages
         - Confirmation emails mentioned
         - Visual indicators like checkmarks or success icons"""),
-        MessagesPlaceholder(variable_name="chat_history"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
         HumanMessage(content="""Verify if the booking process is complete.
         Current page state: {page_data}
         
         Return your assessment in the format:
-        {"completed": true/false, "reason": "explanation of verification result", "confirmation_details": "any booking reference numbers or important details found"}""")
+        {"completed": True/False, "reason": "explanation of verification result", "confirmation_details": "any booking reference numbers or important details found"}""")
     ])
     
     tools = [analyze_page]
     
-    return create_openai_functions_agent(llm, tools, prompt)
+    agent = create_openai_functions_agent(llm, tools, prompt)
+    return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 
 # State management functions
 def should_retry(state: Dict) -> Dict:
     """Determine if we should retry the current phase"""
     if state["error_count"] < state["max_retries"]:
-        state["error_count"] += 1
-        return {"next": state["current_phase"]}
-    return {"next": END}
+        return{"error_count": state["error_count"] + 1}
 
 
 
@@ -294,9 +329,9 @@ def navigate_to_booking(state: Dict) -> Dict:
             #print(f"Agent selected: {response['explanation']}")
             
             # Try to click using the selected text
-            if click_element(f"a:has-text('{response}')"):
-                state["current_phase"] = "booking_page_verification"
-                return {"next": "booking_page_verification"}
+            if click_and_switch_to_new_tab(f"a:has-text('{response}')"):
+                
+                return{"status": "success"}
             
             # If direct click fails, try the selector
             #if click_element(response["selector"]):
@@ -305,18 +340,14 @@ def navigate_to_booking(state: Dict) -> Dict:
             
             # If both fail, try the fallback method
             if click_all_book_demo_buttons(""):
-                state["current_phase"] = "booking_page_verification"
-                return {"next": "booking_page_verification"}
-                
+                return{"status": "success"}
         except (json.JSONDecodeError, KeyError) as e:
             logging.error(f"Error parsing agent response: {str(e)}")
         
-        return {"next": "retry_navigation"}
-        
+        return{"status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return {"next": "retry_navigation"}
-
+        return{"status": "retry"}
 def booking_page_verification(state: Dict) -> Dict:
     """Handle verification of booking page"""
     agent = create_verification_agent()
@@ -334,25 +365,23 @@ def booking_page_verification(state: Dict) -> Dict:
         result = json.loads(result["output"])
         
         if result["verified"]:
-            if result["page_type"] == "link_view":
-                state["current_phase"] = "calendar_view_button_clicking"
-                return {"next": "calendar_view_button_clicking"}
+            if result["page_type"] == "calendar_view":
+                return{"status": "calendar_view"}
             elif result["page_type"] == "form_view":
-                state["current_phase"] = "form_filling"
-                return {"next": "form_filling"}
-        
-        return {"next": "retry_navigation"}
-        
+                return{"status": "form_view"}
+        return{"status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return {"next": "retry_navigation"}
-
+        return{"status": "retry"}
 def calendar_view_button_clicking(state: Dict) -> Dict:
     """Handle clicking the buttons in the calendar view"""
     agent = create_calendar_view_agent()    
     
     try:
         # Update state with new page data
+        reload_page("")
+        if (state["error_count"] > 0):
+            scroll_page("")
         page_data = analyze_page("")
         state["page_data"] = page_data
         
@@ -360,25 +389,25 @@ def calendar_view_button_clicking(state: Dict) -> Dict:
             "page_data": page_data,
             "chat_history": []
         })  
-        
+
+
         result = json.loads(result["output"])
-        
+        failed = True
         if result["buttons_to_click"] != "no_buttons_to_click":
             for button in result["buttons_to_click"]:
                 try: 
-                    if(click_element(f"a:has-text('{button}')")):
-                        state["current_phase"] = "booking_page_verification"
-                        return {"next": "booking_page_verification"}
+                    click_and_switch_to_new_tab(f"button:has-text('{button}')")
+                    failed = False
                 except Exception as e:
                     logging.error(f"Error in {state['current_phase']}: {str(e)}")
-                    return {"next": "retry_navigation"}
-        
-        return {"next": "retry_navigation"}
-    
+                    #return{"status": "retry"}
+        if failed:
+            return{"status": "retry"}
+        else:
+            return{"status": "success"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
-        return {"next": "retry_navigation"}
-    
+        return{"status": "retry"}
     
     
     
@@ -416,57 +445,64 @@ def calendar_view_button_clicking(state: Dict) -> Dict:
 #         logging.error(f"Error in {state.current_phase}: {str(e)}")
 #         return {"next": "retry_navigation"}
 
-def fill_booking_form(state: BookingState) -> Dict:
+def fill_booking_form(state: Dict) -> Dict:
     """Handle form filling"""
     agent = create_form_filling_agent()
     
     try:
         # Update state with new page data
-        page_data = analyze_page(state)
-        state.page_data = page_data
+        if (state["error_count"] > 0):
+            scroll_page("")
+        page_data = analyze_page("")
+        state["page_data"] = page_data
+        details = state["booking_details"]
         
         result = agent.invoke({
-            "booking_details": state.booking_details,
+            "booking_details": details,
             "page_data": page_data,
             "chat_history": []
         })
         
-        if "fields" in result:
-            if fill_form_fields(result["fields"], state):
-                return {"next": "form_filling"}
-        elif "action" in result and result["action"] == "submit":
-            if click_element(result["selector"], state):
-                state.current_phase = "verify_completion"
-                return {"next": "verify_completion"}
-        return {"next": "retry_form"}
+        result = json.loads(result["output"])
+        failed = True
+        print(result)
+        if(fill_form_fields({"fields": result["fields"]})):
+            failed = False
+        if click_and_switch_to_new_tab(f"button:has-text('{result['button_text']}')"):
+            failed = False
+        if failed:
+            return {"status": "retry"}
+        else:
+            return {"status": "success"}
         
     except Exception as e:
-        logging.error(f"Error in {state.current_phase}: {str(e)}")
-        return {"next": "retry_form"}
+        logging.error(f"Error in {state['current_phase']}: {str(e)}")
+        return {"status": "retry"}
 
 
-def verify_booking_complete(state: BookingState) -> Dict:
+def verify_booking_complete(state: Dict) -> Dict:
     """Handle verification of booking completion"""
     agent = create_completion_verification_agent()
     
     try:
         # Update state with new page data
-        page_data = analyze_page(state)
-        state.page_data = page_data
+        page_data = analyze_page("")
+        state["page_data"] = page_data
         
         result = agent.invoke({
             "page_data": page_data,
             "chat_history": []
         })
         
+        result = json.loads(result["output"])
         if result["completed"]:
-            return {"next": END}    
+            return {"status": "success"}    
         
-        return {"next": "form_filling"}
+        return {"status": "retry"}
         
     except Exception as e:
         logging.error(f"Error in {state.current_phase}: {str(e)}")
-        return {"next": "form_filling"}
+        return {"status": "retry"}
 
             
 
@@ -486,23 +522,76 @@ def create_booking_workflow(initial_state: Dict) -> StateGraph:
     workflow.add_node("verify_completion", verify_booking_complete)
     
     # Define edges
-    workflow.add_edge(START, "navigation")
-    workflow.add_edge("navigation", "retry_navigation") 
-    workflow.add_edge("navigation", "booking_page_verification")
-    workflow.add_edge("retry_navigation", "navigation")
-    workflow.add_edge("retry_navigation", END)
-    
-    workflow.add_edge("booking_page_verification", "calendar_view_button_clicking")
-    workflow.add_edge("booking_page_verification", "retry_navigation")
-    
-    workflow.add_edge("calendar_view_button_clicking", "retry_navigation")
-    workflow.add_edge("calendar_view_button_clicking", "booking_page_verification")
-    workflow.add_edge("form_filling", "verify_completion")
-    workflow.add_edge("form_filling", "retry_form")
-    workflow.add_edge("retry_form", "form_filling")
-    workflow.add_edge("retry_form", END)
 
-    workflow.add_edge("verify_completion", END)
+    workflow.add_edge(START, "navigation")
+
+    # Define conditional edges based on "status"
+    workflow.add_conditional_edges(
+        "navigation",
+        lambda state: state.get("status", "retry"),  # Default to "retry" if status is missing
+        {
+            "success": "booking_page_verification",
+            "retry": "retry_navigation"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "booking_page_verification",
+        lambda state: state.get("status", "not_verified"),
+        {
+            "calendar_view": "calendar_view_button_clicking",
+            "form_view": "form_filling",
+            "retry": "retry_navigation"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "calendar_view_button_clicking",
+        lambda state: state.get("status", "form_error"),
+        {
+            "success": "booking_page_verification",  # Assume another node
+            "retry": "retry_navigation"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "retry_navigation",
+        lambda state: "retry" if state["error_count"] < state["max_retries"] else "end",
+        {
+            "retry": "navigation",
+            "end": END
+        }
+    )
+
+    workflow.add_conditional_edges(
+        "form_filling",
+        lambda state: state.get("status", "retry"),
+        {
+            "success": "verify_completion",
+            "retry": "retry_navigation"
+        }
+    )
+
+    workflow.add_conditional_edges(
+        "verify_completion",
+        lambda state: "success" if state["status"] == "success" else "retry",
+        {
+            "success": END,
+            "retry": "booking_page_verification"
+        }
+    )
+    
+    # workflow.add_edge("booking_page_verification", "calendar_view_button_clicking")
+    # workflow.add_edge("booking_page_verification", "retry_navigation")
+    
+    # workflow.add_edge("calendar_view_button_clicking", "retry_navigation")
+    # workflow.add_edge("calendar_view_button_clicking", "booking_page_verification")
+    # workflow.add_edge("form_filling", "verify_completion")
+    # workflow.add_edge("form_filling", "retry_form")
+    # workflow.add_edge("retry_form", "form_filling")
+    # workflow.add_edge("retry_form", END)
+
+    # workflow.add_edge("verify_completion", END)
 
 
     return workflow.compile()
@@ -522,14 +611,15 @@ def run_booking_automation(url: str, booking_details: Dict):
             "page_data": {},
             "booking_details": booking_details,
             "error_count": 0,
-            "max_retries": 3
+            "max_retries": 3,
+            "status": None
         }
         
         workflow = create_booking_workflow(initial_state)
         
         # Run the workflow
         final_state = workflow.invoke(initial_state)
-        return final_state["current_phase"] == END
+        return True
 
     except Exception as e:
         logging.error(f"Error in run_booking_automation: {str(e)}")
@@ -554,7 +644,7 @@ if __name__ == "__main__":
     }
     
     success = run_booking_automation(
-        url="https://www.revyl.ai/",
+        url="https://www.tryfabricate.com/",
         booking_details=booking_details
     )
     
