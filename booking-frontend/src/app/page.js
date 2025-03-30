@@ -13,6 +13,8 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [logs, setLogs] = useState([]);
+
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -46,12 +48,18 @@ export default function Home() {
       });
 
       const data = await response.json();
+
       
       if (!response.ok) {
         throw new Error(data.error || 'Failed to book demo');
       }
       
       setResult(data);
+      console.log(data);
+      if (data.logs) {
+        setLogs(data.logs);
+        console.log(logs);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -168,6 +176,31 @@ export default function Home() {
               </div>
             )}
           </div>
+          {logs.length > 0 && (
+  <div className="mt-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
+    <h2 className="text-lg font-medium mb-2">Process Logs</h2>
+    <div className="max-h-96 overflow-y-auto bg-gray-100 p-3 rounded font-mono text-sm">
+      {logs.map((logEntry, index) => {
+        // If logs are already formatted as strings
+        if (typeof logEntry === 'string') {
+          return <div key={index} className="mb-1">{logEntry}</div>;
+        }
+        
+        // If logs are still JSON objects
+        return (
+          <div key={index} className="mb-2 p-2 bg-white rounded">
+            {Object.entries(logEntry).map(([key, value]) => (
+              <div key={key}>
+                <span className="font-semibold">{key}:</span> {JSON.stringify(value)}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
+
         </div>
       </main>
     </div>

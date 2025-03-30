@@ -51,22 +51,49 @@ def book_demo():
             
         # Log the request
         logging.info(f"Processing booking request for URL: {url}")
-        
+
         # Run the booking automation
-        success = run_booking_automation(url=url, booking_details=booking_details)
-        
-        # Return response
+        process_log = run_booking_automation(url=url, booking_details=booking_details)
+        print(process_log)
+
+        # Check the status from the last entry in the process log
+        final_status = next((item.get("status") for item in reversed(process_log) 
+                        if "status" in item), None)
+
+        success = final_status == "success"
+
+        # Format the logs for better readability
+        formatted_logs = []
+        for log_entry in process_log:
+            for key, value in log_entry.items():
+                formatted_logs.append(f"{key}: {value}")
+
+        # Return response with the full process log
         if success:
             logging.info(f"Booking completed successfully for URL: {url}")
-            return jsonify({"success": True, "message": "Booking completed successfully"}), 200
+            return jsonify({
+                "success": True, 
+                "message": "Booking completed successfully",
+                "logs": formatted_logs
+            }), 200
         else:
             logging.error(f"Booking process failed for URL: {url}")
-            return jsonify({"success": False, "error": "Booking process failed"}), 500
+            return jsonify({
+                "success": False, 
+                "error": "Booking process failed",
+                "logs": formatted_logs
+            }), 500
+
             
     except Exception as e:
         error_details = traceback.format_exc()
         logging.error(f"Error processing booking request: {str(e)}\n{error_details}")
-        return jsonify({"success": False, "error": str(e), "details": error_details}), 500
+        return jsonify({
+            "success": False, 
+            "error": str(e), 
+            "details": error_details,
+            "logs": []
+        }), 500
 
 if __name__ == '__main__':
     app.run(port=5000)

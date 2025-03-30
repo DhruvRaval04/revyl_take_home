@@ -21,6 +21,7 @@ load_dotenv()
 
 # Global automation instance
 automation = None
+process_log =[]
 
 # Define a TypedDict for our state
 class BookingStateDict(TypedDict):
@@ -298,9 +299,13 @@ def create_completion_verification_agent():
 # State management functions
 def should_retry(state: Dict) -> Dict:
     """Determine if we should retry the current phase"""
+    global process_log
     if state["error_count"] < state["max_retries"]:
+        process_log.append({"retry_navigation": f"retrying from start for the {state['error_count']} time"})
         return{"error_count": state["error_count"] + 1}
     else:
+        
+        process_log.append({"retry_navigation": "exceeded max retries"})
         return{"status": "failure"}
 
 
@@ -308,6 +313,7 @@ def should_retry(state: Dict) -> Dict:
 
 def navigate_to_booking(state: Dict) -> Dict:
     """Handle navigation to booking page"""
+    global process_log
     try:
         # Get page data and update state
         page_data = analyze_page("")
@@ -327,12 +333,14 @@ def navigate_to_booking(state: Dict) -> Dict:
         
         # Parse the agent's response
         try:
+            
+            process_log.append({"navigation": f"agent selected: {result['output']} as the text for the button to click"})
             response = result["output"]
             #print(f"Agent selected: {response['explanation']}")
             
             # Try to click using the selected text
             if click_and_switch_to_new_tab(f"a:has-text('{response}')"):
-                
+                process_log.append({"navigation": f"clicked the button with text: {response}"})
                 return{"page_data": page_data, "status": "success"}
             
             # If direct click fails, try the selector
@@ -342,23 +350,26 @@ def navigate_to_booking(state: Dict) -> Dict:
             
             # If both fail, try the fallback method
             if click_all_book_demo_buttons(""):
+                process_log.append({"navigation": f"clicked all book demo buttons"})
                 return{"page_data": page_data, "status": "success"}
         except (json.JSONDecodeError, KeyError) as e:
             logging.error(f"Error parsing agent response: {str(e)}")
-        
+            process_log.append({"navigation": f"error parsing agent response: {str(e)}"})
         return{"page_data": page_data, "status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
+        process_log.append({"navigation": f"error in {state['current_phase']}: {str(e)}"})
         return{"page_data": page_data, "status": "retry"}
 def booking_page_verification(state: Dict) -> Dict:
     """Handle verification of booking page"""
     agent = create_verification_agent()
-    
+    global process_log
     try:
         # Update state with new page data
         page_data = analyze_page("")  # Pass empty string as tool_input
         #page is the same, so retry
         if(page_data == state["page_data"]):
+            process_log.append({"booking_page_verification": "page is the same, so retry"})
             return{"page_data": page_data, "status": "retry"}
         #state["page_data"] = page_data
         
@@ -368,7 +379,7 @@ def booking_page_verification(state: Dict) -> Dict:
         })
 
         result = json.loads(result["output"])
-        
+        process_log.append({"booking_page_verification": f"agent verified: {result['verified']} and the page type is: {result['page_type']}"})
         if result["verified"]:
             if result["page_type"] == "calendar_view":
                 return{"page_data": page_data, "status": "calendar_view"}
@@ -377,15 +388,17 @@ def booking_page_verification(state: Dict) -> Dict:
         return{"page_data": page_data, "status": "retry"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
+        process_log.append({"booking_page_verification": f"error in {state['current_phase']}: {str(e)}"})
         return{"page_data": page_data, "status": "retry"}
 def calendar_view_button_clicking(state: Dict) -> Dict:
     """Handle clicking the buttons in the calendar view"""
     agent = create_calendar_view_agent()    
-    
+    global process_log
     try:
         # Update state with new page data
         reload_page("")
         if (state["error_count"] > 0):
+            process_log.append({"calendar_view_button_clicking": "scrolling page since there was an error"})
             scroll_page("")
         page_data = analyze_page("")
         state["page_data"] = page_data
@@ -395,23 +408,28 @@ def calendar_view_button_clicking(state: Dict) -> Dict:
             "chat_history": []
         })  
 
-
+        process_log.append({"calendar_view_button_clicking": f"agent output: {result['output']}"})
         result = json.loads(result["output"])
         failed = True
         if result["buttons_to_click"] != "no_buttons_to_click":
             for button in result["buttons_to_click"]:
                 try: 
                     click_and_switch_to_new_tab(f"button:has-text('{button}')")
+                    process_log.append({"calendar_view_button_clicking": f"clicked the button with text: {button}"})
                     failed = False
                 except Exception as e:
                     logging.error(f"Error in {state['current_phase']}: {str(e)}")
+                    process_log.append({"calendar_view_button_clicking": f"error in clicking the button with text: {button}: {str(e)}"})
                     #return{"status": "retry"}
         if failed:
+            process_log.append({"calendar_view_button_clicking": "failed to click any buttons"})
             return{"page_data": page_data, "status": "retry"}
         else:
+            process_log.append({"calendar_view_button_clicking": "clicked all buttons"})
             return{"page_data": page_data, "status": "success"}
     except Exception as e:
         logging.error(f"Error in {state['current_phase']}: {str(e)}")
+        process_log.append({"calendar_view_button_clicking": f"error in {state['current_phase']}: {str(e)}"})
         return{"page_data": page_data, "status": "retry"}
     
     
@@ -453,6 +471,7 @@ def calendar_view_button_clicking(state: Dict) -> Dict:
 def fill_booking_form(state: Dict) -> Dict:
     """Handle form filling"""
     agent = create_form_filling_agent()
+    global process_log
     
     try:
         # Update state with new page data
@@ -467,17 +486,22 @@ def fill_booking_form(state: Dict) -> Dict:
             "page_data": page_data,
             "chat_history": []
         })
-        
+        process_log.append({"form_filling": f"agent output: {result['output']}"})
         result = json.loads(result["output"])
         failed = True
         print(result)
         if(fill_form_fields({"fields": result["fields"]})):
             failed = False
+            process_log.append({"form_filling": f"filled the form with the fields: {result['fields']}"})
         if click_and_switch_to_new_tab(f"button:has-text('{result['button_text']}')"):
             failed = False
+            process_log.append({"form_filling": f"clicked the button with text: {result['button_text']}"})
         if failed:
+            process_log.append({"form_filling": "failed to fill the form or click the button"})
             return {"page_data": page_data, "status": "retry"}
+        
         else:
+            process_log.append({"form_filling": "filled the form and clicked the button"})
             return {"page_data": page_data, "status": "success"}
         
     except Exception as e:
@@ -488,7 +512,7 @@ def fill_booking_form(state: Dict) -> Dict:
 def verify_booking_complete(state: Dict) -> Dict:
     """Handle verification of booking completion"""
     agent = create_completion_verification_agent()
-    
+    global process_log
     try:
         # Update state with new page data
         page_data = analyze_page("")
@@ -498,11 +522,13 @@ def verify_booking_complete(state: Dict) -> Dict:
             "page_data": page_data,
             "chat_history": []
         })
-        
+        process_log.append({"verify_booking_complete": f"agent output: {result['output']}"})
         result = json.loads(result["output"])
         if result["completed"]:
+            process_log.append({"verify_booking_complete": "booking is complete"})
             return {"page_data": page_data, "status": "success"}    
-        
+        else:
+            process_log.append({"verify_booking_complete": "booking is not complete, so we go back to the start"})
         return {"page_data": page_data, "status": "retry"}
         
     except Exception as e:
@@ -624,10 +650,9 @@ def run_booking_automation(url: str, booking_details: Dict):
         
         # Run the workflow
         final_state = workflow.invoke(initial_state)
-        if final_state["status"] == "success":
-            return True
-        else:
-            return False
+        global process_log
+        process_log.append({"status": final_state["status"] })
+        return process_log
 
     except Exception as e:
         logging.error(f"Error in run_booking_automation: {str(e)}")
@@ -652,9 +677,13 @@ if __name__ == "__main__":
         "phone": "+1234567890"
     }
     
-    success = run_booking_automation(
+    log = run_booking_automation(
         url="https://www.scale.com/",
         booking_details=booking_details
     )
-    
+    success = True
+    print(log)
+    if(log[-1]["status"] == "retry"):
+        success = False
+    print(log)
     print("Booking successful!" if success else "Booking failed!") 
